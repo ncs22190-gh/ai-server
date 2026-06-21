@@ -11,61 +11,14 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-# デフォルトを3bにするため、配列の順序を調整しました
-# 0: 3b(軽量), 1: 7b(賢い), 2: gemini(クラウド)
+# --- 設定 ---
 MODEL_STAIRS = ["qwen2.5:3b", "qwen2.5:7b", "gemini"]
 current_model_index = 0
+current_engine = "voicevox"
+current_speaker_id = 2
 GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
 
-# --- メモリー管理機能 ---
-def get_memory_file():
-    today = datetime.datetime.now().strftime("%Y-%m-%d")
-    return f"memory_{today}.txt"
-
-def save_memory(user_message, ai_response):
-    filename = get_memory_file()
-    with open(filename, "a", encoding="utf-8") as f:
-        f.write(f"[{datetime.datetime.now().strftime('%H:%M:%S')}]\n")
-        f.write(f"User: {user_message}\nAI: {ai_response}\n---\n")
-
-def load_recent_memory():
-    files = sorted([f for f in os.listdir('.') if f.startswith('memory_')], reverse=True)
-    recent_memory = "\n【過去の会話の記憶】\n"
-    for file in files[:3]:
-        with open(file, "r", encoding="utf-8") as f:
-            recent_memory += f.read() + "\n"
-    return recent_memory
-
-# --- システム設定プロンプト ---
-SYSTEM_PROMPT = """
-あなたはAIアシスタントです。モデルは「3b(軽量)」「7b(賢い)」「gemini(クラウド)」があり、音声はVOICEVOXで話します。
-"""
-
-HTML_UI = """
-<!DOCTYPE html>
-<html lang="ja">
-<head><meta charset="UTF-8"><title>AIアシスタント</title></head>
-<body style="background:#121212; color:#fff; text-align:center; padding:20px;">
-    <h1>AI アシスタント</h1>
-    <div id="output" style="background:#1e1e1e; padding:15px; border-radius:8px; height:200px; overflow-y:auto; border:1px solid #333; text-align:left;">起動中...</div>
-    <button id="btn" style="background:#007bff; color:white; padding:15px; width:100%; border-radius:50px;">タップして話す</button>
-    <script>
-        const btn = document.getElementById('btn');
-        const out = document.getElementById('output');
-        const rec = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-        rec.lang = 'ja-JP';
-        btn.onclick = () => rec.start();
-        rec.onresult = (e) => {
-            const text = e.results[0][0].transcript;
-            fetch('/api/chat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({message: text}) })
-            .then(res => res.json()).then(data => out.innerText = 'AI: ' + data.response);
-        };
-    </script>
-</body>
-</html>
-"""
-
-# --- 各種機能 ---
+# --- 外部記憶・Git ---
 def auto_git_sync(mode="start"):
     try:
         subprocess.run(["git", "add", "."], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -77,27 +30,22 @@ def auto_git_sync(mode="start"):
             subprocess.run(["git", "push"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except: pass
 
-def change_model(user_input):
-    global current_model_index
-    if any(k in user_input for k in ["ジェミニ", "ジェミナイ"]): current_model_index = 2; return "Geminiモードにします。"
-    if any(k in user_input for k in ["軽く", "速く"]): current_model_index = 0; return "3bモデルにします。"
-    if any(k in user_input for k in ["賢く", "深く"]): current_model_index = 1; return "7bモデルにします。"
-    return None
+def get_memory_file():
+    return f"memory_{datetime.datetime.now().strftime('%Y-%m-%d')}.txt"
 
-def chat_with_ollama(prompt):
-    try:
-        res = requests.post("http://localhost:11434/api/generate", json={"model": MODEL_STAIRS[current_model_index], "prompt": prompt, "stream": False}, timeout=60)
-        return res.json().get("response", "エラー")
-    except: return "接続失敗"
+def save_memory(user_message, ai_response):
+    with open(get_memory_file(), "a", encoding="utf-8") as f:
+        f.write(f"[{datetime.datetime.now().strftime('%H:%M:%S')}]\nUser: {user_message}\nAI: {ai_response}\n---\n")
 
-def speak_voicevox(text):
-    try:
-        query = requests.post("http://localhost:50021/audio_query", params={"text": text, "speaker": 2}, timeout=5).json()
-        synth = requests.post("http://localhost:50021/synthesis", params={"speaker": 2}, json=query, timeout=30)
-        with open("temp.wav", "wb") as f: f.write(synth.content)
-        winsound.PlaySound("temp.wav", winsound.SND_FILENAME)
-    except: pass
+def load_recent_memory():
+    files = sorted([f for f in os.listdir('.') if f.startswith('memory_')], reverse=True)
+    recent_memory = "\n【過去の会話の記憶】\n"
+    for file in files[:3]:
+        with open(file, "r", encoding="utf-8") as f:
+            recent_memory += f.read() + "\n"
+    return recent_memory
 
+# --- VOICEVOX管理 ---
 def is_voicevox_running():
     try: return "VOICEVOX.exe" in subprocess.check_output(["tasklist"], text=True)
     except: return False
@@ -106,42 +54,76 @@ def launch_voicevox():
     path = r"C:\Program Files\VOICEVOX\VOICEVOX.exe"
     if os.path.exists(path):
         subprocess.Popen([path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(5)
+        time.sleep(10)
 
-def is_ollama_running():
-    try: return "ollama" in subprocess.check_output(["tasklist"], text=True).lower()
-    except: return False
+def get_voicevox_characters():
+    try:
+        res = requests.get("http://localhost:50021/speakers", timeout=5)
+        return {s["name"]: s["styles"][0]["id"] for s in res.json()}
+    except: return {"ずんだもん": 2}
 
-def launch_ollama():
-    subprocess.Popen([os.path.expanduser(r"~\AppData\Local\Programs\Ollama\ollama.exe"), "serve"], shell=True)
-    time.sleep(10)
+# --- 音声再生 ---
+def speak(text):
+    global current_engine
+    if current_engine == "voicevox":
+        try:
+            query = requests.post("http://localhost:50021/audio_query", params={"text": text, "speaker": current_speaker_id}, timeout=5).json()
+            synth = requests.post("http://localhost:50021/synthesis", params={"speaker": current_speaker_id}, json=query, timeout=30)
+            with open("temp.wav", "wb") as f: f.write(synth.content)
+            winsound.PlaySound("temp.wav", winsound.SND_FILENAME)
+        except: pass
+    else:
+        import win32com.client
+        win32com.client.Dispatch("SAPI.SpVoice").Speak(text)
 
-@app.route('/')
-def index(): return render_template_string(HTML_UI)
+# --- AI本体 (Ollama連携) ---
+def chat_with_ollama(prompt):
+    url = "http://localhost:11434/api/generate"
+    payload = {"model": MODEL_STAIRS[current_model_index], "prompt": prompt, "stream": False}
+    try:
+        res = requests.post(url, json=payload, timeout=60)
+        return res.json().get("response", "エラー")
+    except: return "接続失敗"
+
+# --- 設定切替 ---
+def change_setting(user_input):
+    global current_model_index, current_engine, current_speaker_id
+    
+    # モデル切替
+    if "ジェミニ" in user_input: current_model_index = 2; return "Geminiモードにしました。"
+    if "軽く" in user_input: current_model_index = 0; return "3bモデルにしました。"
+    
+    # エンジン・キャラ切替
+    if "ローカル" in user_input:
+        if is_voicevox_running(): subprocess.run(["taskkill", "/f", "/im", "VOICEVOX.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        current_engine = "local"
+        return "ローカル音声に切り替えました。"
+    
+    chars = get_voicevox_characters()
+    for name, sid in chars.items():
+        if name in user_input:
+            if not is_voicevox_running(): launch_voicevox()
+            current_engine = "voicevox"; current_speaker_id = sid
+            return f"{name}に変更しました。"
+    return None
 
 @app.route('/api/chat', methods=['POST'])
 def chat_api():
-    global current_model_index
     user_message = request.json.get("message", "")
-    notice = change_model(user_message)
+    notice = change_setting(user_message)
     if notice:
-        speak_voicevox(notice)
-        return jsonify({"response": notice, "current_model": MODEL_STAIRS[current_model_index]})
+        speak(notice)
+        return jsonify({"response": notice})
     
-    full_prompt = SYSTEM_PROMPT + load_recent_memory() + "\nUser: " + user_message
-    ai_response = chat_with_ollama(full_prompt) if MODEL_STAIRS[current_model_index] != "gemini" else "Gemini未設定"
+    full_prompt = load_recent_memory() + "\nUser: " + user_message
+    ai_response = chat_with_ollama(full_prompt)
     
     save_memory(user_message, ai_response)
-    speak_voicevox(ai_response)
+    speak(ai_response)
     auto_git_sync(mode="save")
-    return jsonify({"response": ai_response, "current_model": MODEL_STAIRS[current_model_index]})
-
-def main():
-    auto_git_sync(mode="start")
-    if not is_ollama_running(): launch_ollama()
-    if not is_voicevox_running(): launch_voicevox()
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    return jsonify({"response": ai_response})
 
 if __name__ == "__main__":
-    main()
+    auto_git_sync(mode="start")
+    app.run(host='0.0.0.0', port=5000)
 
