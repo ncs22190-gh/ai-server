@@ -2,13 +2,13 @@ import subprocess, requests, os, time, datetime, winsound
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from gtts import gTTS
-import google.generativeai as genai
+from google import genai
 
 app = Flask(__name__)
 CORS(app)
 
-# APIキー設定（Windows環境変数から取得）
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+# 新しいライブラリのクライアント初期化
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 # --- 設定 ---
 MODEL_STAIRS = ["qwen2.5:3b", "qwen2.5:7b", "gemini"]
@@ -81,13 +81,13 @@ def speak(text):
             win32com.client.Dispatch("SAPI.SpVoice").Speak(text)
         except: pass
 
-# --- AI本体 (脳みそ) ---
+# --- AI本体 ---
 def chat_with_ollama(prompt):
     model_name = MODEL_STAIRS[current_model_index]
     if model_name == "gemini":
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            return model.generate_content(prompt).text
+            response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
+            return response.text
         except Exception as e: return f"Geminiエラー: {str(e)}"
     
     url = "http://localhost:11434/api/generate"
@@ -95,7 +95,7 @@ def chat_with_ollama(prompt):
     try:
         res = requests.post(url, json=payload, timeout=60)
         return res.json().get("response", "エラー")
-    except: return "接続失敗"
+    except: return "Ollama接続失敗"
 
 # --- メインロジック ---
 @app.route('/api/chat', methods=['POST'])
@@ -103,7 +103,7 @@ def chat_api():
     user_message = request.json.get("message", "")
     global current_engine, current_model_index
     
-    # 1. 管理コマンド (スキル・ルール・モデル)
+    # 1. 管理コマンド
     if "スキル何ある" in user_message: return jsonify({"response": list_skills()})
     if "スキル作成：" in user_message:
         parts = user_message.split("：")
@@ -126,7 +126,7 @@ def chat_api():
         if not is_voicevox_running(): launch_voicevox()
         current_engine = "voicevox"; return jsonify({"response": "VOICEVOXにしました。"})
 
-    # 3. 応答生成
+    # 3. 生成
     prompt = f"【基本ルール】\n{load_knowledge()}\n{get_skill_content(user_message)}\nUser: {user_message}"
     ai_response = chat_with_ollama(prompt)
     
@@ -135,6 +135,5 @@ def chat_api():
     return jsonify({"response": ai_response})
 
 if __name__ == "__main__":
-    auto_git_sync(mode="start")
     app.run(host='0.0.0.0', port=5000)
 
