@@ -1,9 +1,12 @@
 import subprocess
 import requests
 import io
+import os
+import time
+import datetime
+import winsound
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
-from playsound import playsound
 
 app = Flask(__name__)
 CORS(app)
@@ -12,235 +15,129 @@ MODEL_STAIRS = ["qwen2.5:7b", "qwen2.5:3b", "gemini"]
 current_model_index = 0
 GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
 
+# --- メモリー管理機能 ---
+def get_memory_file():
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    return f"memory_{today}.txt"
+
+def save_memory(user_message, ai_response):
+    filename = get_memory_file()
+    with open(filename, "a", encoding="utf-8") as f:
+        f.write(f"[{datetime.datetime.now().strftime('%H:%M:%S')}]\n")
+        f.write(f"User: {user_message}\nAI: {ai_response}\n---\n")
+
+def load_recent_memory():
+    files = sorted([f for f in os.listdir('.') if f.startswith('memory_')], reverse=True)
+    recent_memory = "\n【過去の会話の記憶】\n"
+    for file in files[:3]:
+        with open(file, "r", encoding="utf-8") as f:
+            recent_memory += f.read() + "\n"
+    return recent_memory
+
+# --- システム設定プロンプト ---
+SYSTEM_PROMPT = """
+あなたは車載AIアシスタントです。モデルは「7b(賢い)」「3b(軽量)」「gemini(クラウド)」があり、音声は「VOICEVOX」「GoogleTTS」等が選べます。
+"""
+
 HTML_UI = """
 <!DOCTYPE html>
 <html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>車載 AI アシスタント</title>
-    <style>
-        body { font-family: sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
-        .container { text-align: center; width: 100%; max-width: 400px; }
-        h1 { font-size: 1.5rem; margin-bottom: 10px; }
-        #status { color: #888; margin-bottom: 20px; font-size: 0.9rem; }
-        #output { background: #1e1e1e; padding: 15px; border-radius: 8px; min-height: 100px; margin-bottom: 20px; text-align: left; border: 1px solid #333; overflow-y: auto; max-height: 200px; }
-        button { background: #007bff; color: white; border: none; padding: 15px 30px; font-size: 1.1rem; border-radius: 50px; cursor: pointer; width: 100%; box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: background 0.2s; }
-        button:active { background: #0056b3; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1 id="model-display">AI アシスタント</h1>
-        <div id="status">接続完了</div>
-        <div id="output">ここにAIの応答が表示されます。</div>
-        <button id="talk-btn">タップして話す</button>
-    </div>
-
+<head><meta charset="UTF-8"><title>車載 AI</title></head>
+<body style="background:#121212; color:#fff; text-align:center; padding:20px;">
+    <h1>AI アシスタント</h1>
+    <div id="output" style="background:#1e1e1e; padding:15px; border-radius:8px; height:200px; overflow-y:auto; border:1px solid #333; text-align:left;">起動中...</div>
+    <button id="btn" style="background:#007bff; color:white; padding:15px; width:100%; border-radius:50px;">タップして話す</button>
     <script>
-        const talkBtn = document.getElementById('talk-btn');
-        const outputDiv = document.getElementById('output');
-        const modelDisplay = document.getElementById('model-display');
-        
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRecognition) {
-            alert('お使いのブラウザは音声認識に対応していません。');
-        } else {
-            const recognition = new SpeechRecognition();
-            recognition.lang = 'ja-JP';
-            recognition.interimResults = false;
-
-            talkBtn.addEventListener('click', () => {
-                recognition.start();
-                talkBtn.innerText = '聴取中...';
-                talkBtn.style.background = '#dc3545';
-            });
-
-            recognition.addEventListener('result', (e) => {
-                const text = e.results[0][0].transcript;
-                outputDiv.innerText = 'あなた: ' + text;
-                sendToAI(text);
-            });
-
-            recognition.addEventListener('end', () => {
-                talkBtn.innerText = 'タップして話す';
-                talkBtn.style.background = '#007bff';
-            });
-        }
-
-        function sendToAI(text) {
-            fetch('/api/chat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: text })
-            })
-            .then(res => res.json())
-            .then(data => {
-                outputDiv.innerText = 'AI: ' + data.response;
-                modelDisplay.innerText = 'AI: ' + data.current_model;
-            })
-            .catch(err => {
-                outputDiv.innerText = '通信エラーが発生しました。';
-            });
-        }
+        const btn = document.getElementById('btn');
+        const out = document.getElementById('output');
+        const rec = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+        rec.lang = 'ja-JP';
+        btn.onclick = () => rec.start();
+        rec.onresult = (e) => {
+            const text = e.results[0][0].transcript;
+            fetch('/api/chat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({message: text}) })
+            .then(res => res.json()).then(data => out.innerText = 'AI: ' + data.response);
+        };
     </script>
 </body>
 </html>
 """
 
+# --- 各種機能 ---
 def auto_git_sync(mode="start"):
     try:
         subprocess.run(["git", "add", "."], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(["git", "commit", "-m", "Auto sync by AI Assistant"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
+        subprocess.run(["git", "commit", "-m", "Auto sync"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if mode == "start":
             subprocess.run(["git", "pull", "--rebase"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             subprocess.run(["git", "push"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        elif mode == "save":
+        else:
             subprocess.run(["git", "push"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except (subprocess.CalledProcessError, Exception):
-        pass
+    except: pass
 
 def change_model(user_input):
     global current_model_index
-    gemini_keywords = ["ジェジェ", "じぇじぇ", "ジェミニ", "じぇみに", "クラウド"]
-    light_keywords = ["遅い", "おそい", "遅く", "重い", "おもい", "軽く", "かるく", "速く", "はやく", "1段階"]
-    heavy_keywords = ["賢く", "かしこく", "戻して", "もどして", "深く", "ふかく", "ローカル"]
-    
-    if any(k in user_input for k in gemini_keywords):
-        current_model_index = 2
-        return "頭脳を外部クラウドのGeminiモードに切り替えます。"
-    if any(k in user_input for k in light_keywords):
-        if current_model_index == 0:
-            current_model_index = 1
-            return f"レスポンス重視で軽量な {MODEL_STAIRS[current_model_index]} に切り替えます。"
-    elif any(k in user_input for k in heavy_keywords):
-        if current_model_index == 1 or current_model_index == 2:
-            current_model_index = 0
-            return f"思考力重視のローカルAI {MODEL_STAIRS[current_model_index]} に切り替えます。"
+    if any(k in user_input for k in ["ジェミニ", "クラウド"]): current_model_index = 2; return "Geminiモードにします。"
+    if any(k in user_input for k in ["軽く", "速く"]): current_model_index = 1; return "3bモデルにします。"
+    if any(k in user_input for k in ["賢く", "深く"]): current_model_index = 0; return "7bモデルにします。"
     return None
 
 def chat_with_ollama(prompt):
-    url = "http://localhost:11434/api/generate"
-    # modelパラメータが正しいか、Ollamaが動いているかを確認するログを追加
-    payload = {"model": MODEL_STAIRS[current_model_index], "prompt": prompt, "stream": False}
     try:
-        response = requests.post(url, json=payload, timeout=60) # タイムアウトを少し延長
-        if response.status_code == 200:
-            return response.json().get("response", "エラーが発生しました。")
-        else:
-            return f"Ollamaエラー: {response.status_code}"
-    except Exception as e:
-        return f"Ollama接続失敗: {str(e)}"
+        res = requests.post("http://localhost:11434/api/generate", json={"model": MODEL_STAIRS[current_model_index], "prompt": prompt, "stream": False}, timeout=60)
+        return res.json().get("response", "エラー")
+    except: return "接続失敗"
 
-def chat_with_gemini(prompt):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+def speak_voicevox(text):
     try:
-        response = requests.post(url, json=payload, timeout=30)
-        if response.status_code == 200:
-            return response.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except requests.exceptions.RequestException:
-        return "Gemini APIとの通信に失敗しました。ネット環境を確認してください。"
-    return "Geminiから応答を取得できませんでした。"
+        query = requests.post("http://localhost:50021/audio_query", params={"text": text, "speaker": 2}, timeout=5).json()
+        synth = requests.post("http://localhost:50021/synthesis", params={"speaker": 2}, json=query, timeout=30)
+        with open("temp.wav", "wb") as f: f.write(synth.content)
+        winsound.PlaySound("temp.wav", winsound.SND_FILENAME)
+    except: pass
 
-import os
-import requests
-import winsound # playsoundの代わりにwinsoundをインポート
+def is_voicevox_running():
+    try: return "VOICEVOX.exe" in subprocess.check_output(["tasklist"], text=True)
+    except: return False
 
-def speak_voicevox(text, speaker_id=2):
-    base_url = "http://localhost:50021"
-    try:
-        query_res = requests.post(f"{base_url}/audio_query", params={"text": text, "speaker": speaker_id}, timeout=10)
-        if query_res.status_code != 200: return
-        
-        synth_res = requests.post(f"{base_url}/synthesis", params={"speaker": speaker_id}, json=query_res.json(), timeout=30)
-        if synth_res.status_code != 200: return
-        
-        # WAVをバイナリとして保存
-        wav_path = os.path.join(os.getcwd(), "temp.wav")
-        with open(wav_path, "wb") as f:
-            f.write(synth_res.content)
-            
-        # winsoundで再生
-        winsound.PlaySound(wav_path, winsound.SND_FILENAME)
-        
-        if os.path.exists(wav_path):
-            os.remove(wav_path)
-    except Exception:
-        pass
+def launch_voicevox():
+    path = r"C:\Program Files\VOICEVOX\VOICEVOX.exe"
+    if os.path.exists(path):
+        subprocess.Popen([path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(5)
+
+def is_ollama_running():
+    try: return "ollama" in subprocess.check_output(["tasklist"], text=True).lower()
+    except: return False
+
+def launch_ollama():
+    subprocess.Popen([os.path.expanduser(r"~\AppData\Local\Programs\Ollama\ollama.exe"), "serve"], shell=True)
+    time.sleep(10)
 
 @app.route('/')
-def index():
-    return render_template_string(HTML_UI)
+def index(): return render_template_string(HTML_UI)
 
 @app.route('/api/chat', methods=['POST'])
 def chat_api():
     global current_model_index
-    data = request.json
-    user_message = data.get("message", "")
+    user_message = request.json.get("message", "")
+    notice = change_model(user_message)
+    if notice:
+        speak_voicevox(notice)
+        return jsonify({"response": notice, "current_model": MODEL_STAIRS[current_model_index]})
     
-    switch_notice = change_model(user_message)
-    if switch_notice:
-        speak_voicevox(switch_notice)
-        return jsonify({"response": switch_notice, "current_model": MODEL_STAIRS[current_model_index]})
+    full_prompt = SYSTEM_PROMPT + load_recent_memory() + "\nUser: " + user_message
+    ai_response = chat_with_ollama(full_prompt) if MODEL_STAIRS[current_model_index] != "gemini" else "Gemini未設定"
     
-    if MODEL_STAIRS[current_model_index] == "gemini":
-        ai_response = chat_with_gemini(user_message)
-    else:
-        ai_response = chat_with_ollama(user_message)
-        
+    save_memory(user_message, ai_response)
     speak_voicevox(ai_response)
     auto_git_sync(mode="save")
-    
     return jsonify({"response": ai_response, "current_model": MODEL_STAIRS[current_model_index]})
-
-import os
-import time
-
-def is_voicevox_running():
-    try:
-        output = subprocess.check_output(["tasklist"], text=True)
-        return "VOICEVOX.exe" in output
-    except Exception:
-        return False
-
-def launch_voicevox():
-    #voicevox_path = os.path.expanduser(r"~\AppData\Local\Programs\VOICEVOX\VOICEVOX.exe")
-    voicevox_path = r"C:\Program Files\VOICEVOX\VOICEVOX.exe"
-    if os.path.exists(voicevox_path):
-        subprocess.Popen([voicevox_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(5)
-    else:
-        pass
-
-def is_ollama_running():
-    try:
-        # tasklistコマンドでOllamaが動いているかチェック
-        output = subprocess.check_output(["tasklist"], text=True)
-        return "ollama" in output.lower()
-    except Exception:
-        return False
-
-def launch_ollama():
-    # Ollamaのインストールパスを確認（通常は以下の場所です）
-    ollama_path = os.path.expanduser(r"~\AppData\Local\Programs\Ollama\ollama.exe")
-    if os.path.exists(ollama_path):
-        # バックグラウンドで起動
-        subprocess.Popen([ollama_path, "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(10) # 起動完了まで少し待機
 
 def main():
     auto_git_sync(mode="start")
-    
-    # Ollamaが動いていなければ起動
-    if not is_ollama_running():
-        launch_ollama()
-
-    if not is_voicevox_running():
-        launch_voicevox()
-        
-    print(f"システム起動完了。現在のモデル: {MODEL_STAIRS[current_model_index]}")
+    if not is_ollama_running(): launch_ollama()
+    if not is_voicevox_running(): launch_voicevox()
     app.run(host='0.0.0.0', port=5000, debug=False)
 
 if __name__ == "__main__":
