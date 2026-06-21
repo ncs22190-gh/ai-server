@@ -79,7 +79,7 @@ def auto_git_sync(mode="start"):
 
 def change_model(user_input):
     global current_model_index
-    if any(k in user_input for k in ["ジェミニ", "クラウド"]): current_model_index = 2; return "Geminiモードにします。"
+    if any(k in user_input for k in ["ジェミニ", "ジェミナイ"]): current_model_index = 2; return "Geminiモードにします。"
     if any(k in user_input for k in ["軽く", "速く"]): current_model_index = 0; return "3bモデルにします。"
     if any(k in user_input for k in ["賢く", "深く"]): current_model_index = 1; return "7bモデルにします。"
     return None
