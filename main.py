@@ -41,17 +41,42 @@ def handle_voice(data):
 @app.route('/')
 def index():
     return render_template_string("""
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
-    <button onclick="start()">開始</button>
-    <script>
-        const socket = io();
-        function start() {
-            const rec = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
-            rec.onresult = (e) => socket.emit('voice_input', {text: e.results[0][0].transcript});
-            rec.start();
-        }
-        socket.on('ai_response', (d) => { console.log(d.text); });
-    </script>
+    <!DOCTYPE html>
+    <html>
+    <body>
+        <h2>AI 対話システム</h2>
+        <div>
+            <input type="radio" name="mode" value="live" checked> ライブ会話
+            <input type="radio" name="mode" value="chat"> 一問一答
+            <button onclick="start()">会話開始</button>
+        </div>
+        <div id="log" style="height:300px; border:1px solid #ccc; overflow-y:scroll; margin-top:10px;"></div>
+        
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+        <script>
+            const socket = io();
+            const log = document.getElementById('log');
+            
+            function start() {
+                const mode = document.querySelector('input[name="mode"]:checked').value;
+                const rec = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+                rec.lang = 'ja-JP';
+                rec.onresult = (e) => {
+                    const text = e.results[0][0].transcript;
+                    log.innerHTML += '<p>あなた: ' + text + '</p>';
+                    socket.emit('voice_input', {text: text, mode: mode});
+                };
+                rec.start();
+            }
+            
+            socket.on('ai_response', (d) => {
+                log.innerHTML += '<p>AI: ' + d.text + '</p>';
+                const u = new SpeechSynthesisUtterance(d.text);
+                window.speechSynthesis.speak(u);
+            });
+        </script>
+    </body>
+    </html>
     """)
 
 if __name__ == "__main__":
