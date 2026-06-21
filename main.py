@@ -38,13 +38,13 @@ def load_recent_memory():
 
 # --- システム設定プロンプト ---
 SYSTEM_PROMPT = """
-あなたは車載AIアシスタントです。モデルは「3b(軽量)」「7b(賢い)」「gemini(クラウド)」があり、音声はVOICEVOXで話します。
+あなたはAIアシスタントです。モデルは「3b(軽量)」「7b(賢い)」「gemini(クラウド)」があり、音声はVOICEVOXで話します。
 """
 
 HTML_UI = """
 <!DOCTYPE html>
 <html lang="ja">
-<head><meta charset="UTF-8"><title>車載 AI</title></head>
+<head><meta charset="UTF-8"><title>AIアシスタント</title></head>
 <body style="background:#121212; color:#fff; text-align:center; padding:20px;">
     <h1>AI アシスタント</h1>
     <div id="output" style="background:#1e1e1e; padding:15px; border-radius:8px; height:200px; overflow-y:auto; border:1px solid #333; text-align:left;">起動中...</div>
