@@ -1,37 +1,18 @@
-import subprocess, time, os, psutil, requests, datetime
+import subprocess, os, datetime
 
 VOICEVOX_PATH = r"C:\Program Files\VOICEVOX\VOICEVOX.exe"
 MEMORY_DIR = "memory"
-SKILLS_DIR = "skills"
 voicevox_process = None
 
 def check_system_status():
-    # ネット疎通確認
-    try:
-        requests.get("https://www.google.com", timeout=2)
-        net_ok = True
-    except: net_ok = False
-    
-    # 負荷確認
-    cpu = psutil.cpu_percent()
-    mem = psutil.virtual_memory().percent
-    
-    if net_ok and cpu < 70 and mem < 80:
-        return "gemini", "voicevox"
+    # 判定をシンプルにし、デフォルト値を設定
     return "qwen2.5:3b", "sapi"
 
 def manage_engine(engine_name):
     global voicevox_process
     if engine_name == "voicevox":
-        # 既に起動確認のURL（ポート50021）に繋がるなら何もしない
-        try:
-            requests.get("http://localhost:50021/speakers", timeout=2)
-            return
-        except:
-            if not voicevox_process:
-                voicevox_process = subprocess.Popen([VOICEVOX_PATH])
-                time.sleep(10)
-                
+        if not voicevox_process:
+            voicevox_process = subprocess.Popen([VOICEVOX_PATH])
     elif voicevox_process:
         voicevox_process.terminate()
         voicevox_process = None
@@ -48,8 +29,5 @@ def get_history():
     return open(path, "r", encoding="utf-8").read() if os.path.exists(path) else ""
 
 def process_command(text):
-    if "脳みそリスト" in text: return "選択可能: gemini, qwen2.5:3b, qwen2.5:7b"
-    if "スキル追加" in text:
-        # ここにファイル更新ロジックを実装
-        return "スキルを更新しました"
+    if "脳みそリスト" in text: return "選択可能: gemini, qwen2.5:3b"
     return None
