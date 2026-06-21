@@ -11,7 +11,9 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-MODEL_STAIRS = ["qwen2.5:7b", "qwen2.5:3b", "gemini"]
+# デフォルトを3bにするため、配列の順序を調整しました
+# 0: 3b(軽量), 1: 7b(賢い), 2: gemini(クラウド)
+MODEL_STAIRS = ["qwen2.5:3b", "qwen2.5:7b", "gemini"]
 current_model_index = 0
 GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
 
@@ -36,7 +38,7 @@ def load_recent_memory():
 
 # --- システム設定プロンプト ---
 SYSTEM_PROMPT = """
-あなたは車載AIアシスタントです。モデルは「7b(賢い)」「3b(軽量)」「gemini(クラウド)」があり、音声は「VOICEVOX」「GoogleTTS」等が選べます。
+あなたは車載AIアシスタントです。モデルは「3b(軽量)」「7b(賢い)」「gemini(クラウド)」があり、音声はVOICEVOXで話します。
 """
 
 HTML_UI = """
@@ -78,8 +80,8 @@ def auto_git_sync(mode="start"):
 def change_model(user_input):
     global current_model_index
     if any(k in user_input for k in ["ジェミニ", "クラウド"]): current_model_index = 2; return "Geminiモードにします。"
-    if any(k in user_input for k in ["軽く", "速く"]): current_model_index = 1; return "3bモデルにします。"
-    if any(k in user_input for k in ["賢く", "深く"]): current_model_index = 0; return "7bモデルにします。"
+    if any(k in user_input for k in ["軽く", "速く"]): current_model_index = 0; return "3bモデルにします。"
+    if any(k in user_input for k in ["賢く", "深く"]): current_model_index = 1; return "7bモデルにします。"
     return None
 
 def chat_with_ollama(prompt):
