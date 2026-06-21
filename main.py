@@ -1,53 +1,58 @@
-import subprocess, os, time, datetime, winsound
+import socketio, eventlet, psutil, requests, time
 from flask import Flask, render_template_string
 from flask_socketio import SocketIO, emit
-from gtts import gTTS
+from utils import check_system_status, manage_engine, update_memory, get_history, process_command
+from prompts import get_system_prompt
 from google import genai
+import os
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'secret!'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# クライアント初期化
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+# 初期状態の自動選択
+current_model, current_engine = check_system_status()
+manage_engine(current_engine)
 
-# --- HTML/JS (ライブ会話・一問一答切り替え) ---
-HTML_INTERFACE = """
-<!DOCTYPE html>
-<html>
-<body>
-    <h2>AI 対話モード</h2>
-    <button onclick="setMode('manual')">一問一答モード</button>
-    <button onclick="setMode('live')">ライブ会話モード</button>
-    <p>現在のモード: <span id="mode">未選択</span></p>
-    <script>
-        let mode = 'manual';
-        function setMode(m) { mode = m; document.getElementById('mode').innerText = m; }
-        // ここにマイク入力とWebSocket通信のロジックを実装
-    </script>
-</body>
-</html>
-"""
+@socketio.on('voice_input')
+def handle_voice(data):
+    user_text = data['text']
+    # コマンド処理（設定変更・リスト確認）
+    cmd_res = process_command(user_text)
+    if cmd_res:
+        emit('ai_response', {'text': cmd_res})
+        return
+
+    # プロンプト構築（履歴・スキル・ルールを統合）
+    prompt = get_system_prompt(user_text, get_history())
+    
+    # AI応答生成（ネット状況に応じた自動切替対応）
+    try:
+        if current_model == "gemini":
+            client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+            response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt).text
+        else:
+            response = requests.post("http://localhost:11434/api/generate", json={"model": current_model, "prompt": prompt}).json().get("response")
+    except:
+        response = "ネット接続を確認できないため、ローカルモードで応答します。"
+
+    update_memory(user_text, response)
+    emit('ai_response', {'text': response})
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_INTERFACE)
-
-# --- AI本体 ---
-def get_ai_response(prompt):
-    try:
-        response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
-        return response.text
-    except Exception as e: return f"Geminiエラー: {str(e)}"
-
-# --- WebSocket通信 ---
-@socketio.on('voice_input')
-def handle_voice(data):
-    # 音声認識(文字起こし)後、AI回答生成
-    text = data['text']
-    response = get_ai_response(text)
-    # 応答をスマホ側へ送り返す
-    emit('ai_response', {'text': response})
+    return render_template_string("""
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <button onclick="start()">開始</button>
+    <script>
+        const socket = io();
+        function start() {
+            const rec = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+            rec.onresult = (e) => socket.emit('voice_input', {text: e.results[0][0].transcript});
+            rec.start();
+        }
+        socket.on('ai_response', (d) => { console.log(d.text); });
+    </script>
+    """)
 
 if __name__ == "__main__":
     socketio.run(app, host='0.0.0.0', port=5000)

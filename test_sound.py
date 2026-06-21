@@ -1,2 +1,2 @@
 from playsound import playsound
-playsound('test.wav')
+playsound('temp.wav')
