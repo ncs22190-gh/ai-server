@@ -23,9 +23,15 @@ def check_system_status():
 def manage_engine(engine_name):
     global voicevox_process
     if engine_name == "voicevox":
-        if not voicevox_process:
-            voicevox_process = subprocess.Popen([VOICEVOX_PATH])
-            time.sleep(10)
+        # 既に起動確認のURL（ポート50021）に繋がるなら何もしない
+        try:
+            requests.get("http://localhost:50021/speakers", timeout=2)
+            return
+        except:
+            if not voicevox_process:
+                voicevox_process = subprocess.Popen([VOICEVOX_PATH])
+                time.sleep(10)
+                
     elif voicevox_process:
         voicevox_process.terminate()
         voicevox_process = None

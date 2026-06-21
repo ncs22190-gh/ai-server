@@ -1,4 +1,4 @@
-import socketio, eventlet, psutil, requests, time
+import socketio, psutil, requests, time
 from flask import Flask, render_template_string
 from flask_socketio import SocketIO, emit
 from utils import check_system_status, manage_engine, update_memory, get_history, process_command
@@ -55,5 +55,5 @@ def index():
     """)
 
 if __name__ == "__main__":
-    socketio.run(app, host='0.0.0.0', port=5000)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
 
